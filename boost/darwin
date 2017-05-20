@@ -1,0 +1,4 @@
+#!/bin/sh
+./bootstrap.sh --with-libraries=system,filesystem,program_options,date_time,thread,signals --prefix="$CMAKE_INSTALL_PATH"
+# note: delete bin.v2 to clean
+./b2 toolset=clang link=static cxxflags="-fvisibility=hidden -stdlib=libstdc++" linkflags="-stdlib=libstdc++" install

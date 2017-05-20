@@ -1,0 +1,3 @@
+#!/bin/sh
+../../configure --target=x86_64-win64-vs10
+make

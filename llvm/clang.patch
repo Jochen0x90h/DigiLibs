@@ -1,0 +1,86 @@
+Index: CMakeLists.txt
+===================================================================
+--- CMakeLists.txt	(revision 283132)
++++ CMakeLists.txt	(working copy)
+@@ -203,6 +203,7 @@
+     set_target_properties(${name} PROPERTIES COMPILE_FLAGS ${cflag})
+   endif(MSVC)
+   install(TARGETS ${name}
++    EXPORT llvm
+     LIBRARY DESTINATION lib${LLVM_LIBDIR_SUFFIX}
+     ARCHIVE DESTINATION lib${LLVM_LIBDIR_SUFFIX})
+   set_target_properties(${name} PROPERTIES FOLDER "Clang libraries")
+Index: include/clang/Basic/SourceManager.h
+===================================================================
+--- include/clang/Basic/SourceManager.h	(revision 283132)
++++ include/clang/Basic/SourceManager.h	(working copy)
+@@ -234,7 +234,7 @@
+       return SourceLocation::getFromRawEncoding(IncludeLoc);
+     }
+     const ContentCache* getContentCache() const {
+-      return reinterpret_cast<const ContentCache*>(Data & ~7UL);
++      return reinterpret_cast<const ContentCache*>(Data & ~uintptr_t(7));
+     }
+ 
+     /// getCharacteristic - Return whether this is a system header or not.
+Index: lib/CodeGen/CGExprScalar.cpp
+===================================================================
+--- lib/CodeGen/CGExprScalar.cpp	(revision 283132)
++++ lib/CodeGen/CGExprScalar.cpp	(working copy)
+@@ -2466,6 +2466,11 @@
+ /// flow into selects in some cases.
+ static bool isCheapEnoughToEvaluateUnconditionally(const Expr *E,
+                                                    CodeGenFunction &CGF) {
++
++  //! nonstandard patch: always emit select for cond ? a : b
++  return true;
++
++
+   E = E->IgnoreParens();
+ 
+   // Anything that is an integer or floating point constant is fine.
+Index: lib/Lex/Lexer.cpp
+===================================================================
+--- lib/Lex/Lexer.cpp	(revision 283132)
++++ lib/Lex/Lexer.cpp	(working copy)
+@@ -864,7 +864,26 @@
+ //120  x       121  y        122  z        123  {
+ //124  |       125  }        126  ~        127 DEL
+    CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_RAWDEL ,
+-   CHAR_RAWDEL , CHAR_RAWDEL , CHAR_RAWDEL , 0
++   CHAR_RAWDEL , CHAR_RAWDEL , CHAR_RAWDEL , 0           ,
++
++
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++   CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER , CHAR_LETTER ,
++
+ };
+ 
+ static void InitCharacterInfo() {
+Index: tools/CMakeLists.txt
+===================================================================
+--- tools/CMakeLists.txt	(revision 283132)
++++ tools/CMakeLists.txt	(working copy)
+@@ -1,6 +1,6 @@
+ add_subdirectory(libclang)
+-add_subdirectory(c-index-test)
++#add_subdirectory(c-index-test)
+ add_subdirectory(arcmt-test)
+-add_subdirectory(c-arcmt-test)
++#add_subdirectory(c-arcmt-test)
+ add_subdirectory(diagtool)
+ add_subdirectory(driver)

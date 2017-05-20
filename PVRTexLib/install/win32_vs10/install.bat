@@ -1,0 +1,1 @@
+cmake -DCMAKE_INSTALL_PREFIX:PATH="%CMAKE_INSTALL_PATH%\win32_vs10" -P install.cmake

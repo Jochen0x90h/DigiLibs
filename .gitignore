@@ -1,0 +1,23 @@
+*.c
+*.cc
+*.cpp
+*.h
+!cmake/freetype/include/freetype/config/ftmodule.h
+*.html
+*.in
+*.am
+*.png
+*.mk
+build*/
+
+# exclude files of external projects, comment out e.g. when adding CMakeLists.txt or modified config files
+cmake/antlr3c/**/*
+cmake/freeimage/**/*
+cmake/freetype/**/*
+cmake/googletest/**/*
+cmake/imagequant/**/*
+cmake/ogg/**/*
+cmake/squish/**/*
+boost/**/*
+llvm/**/*
+vpx/**/*

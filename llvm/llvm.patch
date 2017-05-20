@@ -1,0 +1,511 @@
+Index: CMakeLists.txt
+===================================================================
+--- CMakeLists.txt	(revision 283131)
++++ CMakeLists.txt	(working copy)
+@@ -12,7 +12,7 @@
+ 
+ set(PACKAGE_VERSION "3.0")
+ 
+-set_property(GLOBAL PROPERTY USE_FOLDERS ON)
++set_property(GLOBAL PROPERTY USE_FOLDERS OFF)
+ 
+ include(VersionFromVCS)
+ 
+Index: cmake/modules/AddLLVM.cmake
+===================================================================
+--- cmake/modules/AddLLVM.cmake	(revision 283131)
++++ cmake/modules/AddLLVM.cmake	(working copy)
+@@ -21,6 +21,7 @@
+     set_target_properties( ${name} PROPERTIES EXCLUDE_FROM_ALL ON)
+   else()
+     install(TARGETS ${name}
++      EXPORT llvm
+       LIBRARY DESTINATION lib${LLVM_LIBDIR_SUFFIX}
+       ARCHIVE DESTINATION lib${LLVM_LIBDIR_SUFFIX})
+   endif()
+Index: include/llvm/ADT/IntervalMap.h
+===================================================================
+--- include/llvm/ADT/IntervalMap.h	(revision 283131)
++++ include/llvm/ADT/IntervalMap.h	(working copy)
+@@ -1977,7 +1977,7 @@
+     CurSize[Nodes] = CurSize[NewNode];
+     Node[Nodes] = Node[NewNode];
+     CurSize[NewNode] = 0;
+-    Node[NewNode] = this->map->newNode<NodeT>();
++    Node[NewNode] = this->map->template newNode<NodeT>();
+     ++Nodes;
+   }
+ 
+Index: include/llvm/ADT/PointerUnion.h
+===================================================================
+--- include/llvm/ADT/PointerUnion.h	(revision 283131)
++++ include/llvm/ADT/PointerUnion.h	(working copy)
+@@ -263,7 +263,7 @@
+         ::llvm::PointerUnionTypeSelector<PT1, T, IsInnerUnion,
+           ::llvm::PointerUnionTypeSelector<PT2, T, IsInnerUnion, IsPT3 >
+                                                                    >::Return Ty;
+-      return Ty(Val).is<T>();
++      return Ty(Val).template is<T>();
+     }
+     
+     /// get<T>() - Return the value of the specified pointer type. If the
+@@ -276,7 +276,7 @@
+         ::llvm::PointerUnionTypeSelector<PT1, T, IsInnerUnion,
+           ::llvm::PointerUnionTypeSelector<PT2, T, IsInnerUnion, IsPT3 >
+                                                                    >::Return Ty;
+-      return Ty(Val).get<T>();
++      return Ty(Val).template get<T>();
+     }
+     
+     /// dyn_cast<T>() - If the current value is of the specified pointer type,
+Index: include/llvm/ADT/Triple.h
+===================================================================
+--- include/llvm/ADT/Triple.h	(revision 283131)
++++ include/llvm/ADT/Triple.h	(working copy)
+@@ -83,6 +83,7 @@
+     AuroraUX,
+     Cygwin,
+     Darwin,
++    DigiWin,
+     DragonFly,
+     FreeBSD,
+     IOS,
+Index: lib/Support/Triple.cpp
+===================================================================
+--- lib/Support/Triple.cpp	(revision 283131)
++++ lib/Support/Triple.cpp	(working copy)
+@@ -100,6 +100,7 @@
+   case AuroraUX: return "auroraux";
+   case Cygwin: return "cygwin";
+   case Darwin: return "darwin";
++  case DigiWin: return "digiwin";
+   case DragonFly: return "dragonfly";
+   case FreeBSD: return "freebsd";
+   case IOS: return "ios";
+@@ -352,6 +353,8 @@
+     return Cygwin;
+   else if (OSName.startswith("darwin"))
+     return Darwin;
++  else if (OSName.startswith("digiwin"))
++    return DigiWin;
+   else if (OSName.startswith("dragonfly"))
+     return DragonFly;
+   else if (OSName.startswith("freebsd"))
+Index: lib/Target/X86/X86FrameLowering.cpp
+===================================================================
+--- lib/Target/X86/X86FrameLowering.cpp	(revision 283131)
++++ lib/Target/X86/X86FrameLowering.cpp	(working copy)
+@@ -806,7 +806,7 @@
+   // responsible for adjusting the stack pointer.  Touching the stack at 4K
+   // increments is necessary to ensure that the guard pages used by the OS
+   // virtual memory manager are allocated in correct sequence.
+-  if (NumBytes >= 4096 && STI.isTargetCOFF() && !STI.isTargetEnvMacho()) {
++  if (NumBytes >= 4096 && (STI.isTargetCOFF() || STI.isTargetDigiWin()) && !STI.isTargetEnvMacho()) {
+     const char *StackProbeSymbol;
+     bool isSPUpdateNeeded = false;
+ 
+@@ -836,6 +836,10 @@
+         .setMIFlag(MachineInstr::FrameSetup);
+     }
+ 
++    // added
++    MachineInstrBuilder MIB;
++    //
++
+     if (Is64Bit) {
+       // Handle the 64-bit Windows ABI case where we need to call __chkstk.
+       // Function prologue is responsible for adjusting the stack pointer.
+@@ -842,6 +846,27 @@
+       BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::RAX)
+         .addImm(NumBytes)
+         .setMIFlag(MachineInstr::FrameSetup);
++
++      // added
++      if (TM.getCodeModel() == CodeModel::Large) {
++        // For large code model we need to do indirect call to __chkstk.
++          
++        // R11 will be used to contain the address of __chkstk.
++        // R11 is a volotiale register and assumed to be destoyed by the callee, 
++        // so there is no need to save and restore it.
++        BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::R11)
++          .addExternalSymbol(StackProbeSymbol);
++        
++        // Create a call to __chkstk function which address contained in R11.
++        MIB = BuildMI(MBB, MBBI, DL, TII.get(X86::CALL64r))
++          .addReg(X86::R11, RegState::Kill);
++      } else {      
++        // For non-large code model we can do direct call to __chkstk.              
++        MIB = BuildMI(MBB, MBBI, DL, TII.get(X86::W64ALLOCA))
++          .addExternalSymbol(StackProbeSymbol);
++      }
++      //
++
+     } else {
+       // Allocate NumBytes-4 bytes on stack in case of isEAXAlive.
+       // We'll also use 4 already allocated bytes for EAX.
+@@ -848,12 +873,18 @@
+       BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
+         .addImm(isEAXAlive ? NumBytes - 4 : NumBytes)
+         .setMIFlag(MachineInstr::FrameSetup);
++
++      // added
++      MIB = BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
++        .addExternalSymbol(StackProbeSymbol);
++      //
+     }
+ 
+-    BuildMI(MBB, MBBI, DL,
+-            TII.get(Is64Bit ? X86::W64ALLOCA : X86::CALLpcrel32))
+-      .addExternalSymbol(StackProbeSymbol)
+-      .addReg(StackPtr,    RegState::Define | RegState::Implicit)
++    //BuildMI(MBB, MBBI, DL,
++    //        TII.get(Is64Bit ? X86::W64ALLOCA : X86::CALLpcrel32))
++    //  .addExternalSymbol(StackProbeSymbol)
++    //  .addReg(StackPtr,    RegState::Define | RegState::Implicit)
++    MIB.addReg(StackPtr,    RegState::Define | RegState::Implicit)
+       .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit)
+       .setMIFlag(MachineInstr::FrameSetup);
+ 
+Index: lib/Target/X86/X86ISelLowering.cpp
+===================================================================
+--- lib/Target/X86/X86ISelLowering.cpp	(revision 283131)
++++ lib/Target/X86/X86ISelLowering.cpp	(working copy)
+@@ -11870,12 +11870,38 @@
+   // non-trivial part is impdef of ESP.
+ 
+   if (Subtarget->isTargetWin64()) {
++
++    // added
++    const char *StackProbeSymbol = 
++    Subtarget->isTargetCygMing() ? "___chkstk" : "__chkstk";
++      
++    MachineInstrBuilder MIB;    
++    if (getTargetMachine().getCodeModel() == CodeModel::Large) {
++      // For large code model we need to do indirect call to __chkstk.
++    
++      // R11 will be used to contain the address of __chkstk.
++      // R11 is a volotiale register and assumed to be destoyed by the callee, 
++      // so there is no need to save and restore it.
++      BuildMI(*BB, MI, DL, TII->get(X86::MOV64ri), X86::R11)
++      .addExternalSymbol(StackProbeSymbol);
++      // Create a call to __chkstk function which address contained in R11.
++      MIB = BuildMI(*BB, MI, DL, TII->get(X86::CALL64r))
++      .addReg(X86::R11, RegState::Kill);
++                  
++    } else {      
++      // For non-large code model we can do direct call to __chkstk.      
++      MIB = BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
++      .addExternalSymbol(StackProbeSymbol);
++    }
++    //
++
+     if (Subtarget->isTargetCygMing()) {
+       // ___chkstk(Mingw64):
+       // Clobbers R10, R11, RAX and EFLAGS.
+       // Updates RSP.
+-      BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
+-        .addExternalSymbol("___chkstk")
++      //BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
++      //  .addExternalSymbol("___chkstk")
++      MIB
+         .addReg(X86::RAX, RegState::Implicit)
+         .addReg(X86::RSP, RegState::Implicit)
+         .addReg(X86::RAX, RegState::Define | RegState::Implicit)
+@@ -11885,8 +11911,9 @@
+       // __chkstk(MSVCRT): does not update stack pointer.
+       // Clobbers R10, R11 and EFLAGS.
+       // FIXME: RAX(allocated size) might be reused and not killed.
+-      BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
+-        .addExternalSymbol("__chkstk")
++      //BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
++      //  .addExternalSymbol("__chkstk")
++      MIB
+         .addReg(X86::RAX, RegState::Implicit)
+         .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
+       // RAX has the offset to subtracted from RSP.
+Index: lib/Target/X86/X86Subtarget.h
+===================================================================
+--- lib/Target/X86/X86Subtarget.h	(revision 283131)
++++ lib/Target/X86/X86Subtarget.h	(working copy)
+@@ -225,6 +225,7 @@
+   bool isTargetCygMing() const {
+     return isTargetMingw() || isTargetCygwin();
+   }
++  bool isTargetDigiWin() const { return TargetTriple.getOS() == Triple::DigiWin; }
+ 
+   /// isTargetCOFF - Return true if this is any COFF/Windows target variant.
+   bool isTargetCOFF() const {
+@@ -233,7 +234,7 @@
+ 
+   bool isTargetWin64() const {
+     // FIXME: x86_64-cygwin has not been released yet.
+-    return In64BitMode && (isTargetCygMing() || isTargetWindows());
++    return In64BitMode && (isTargetCygMing() || isTargetWindows() || isTargetDigiWin());
+   }
+ 
+   bool isTargetEnvMacho() const {
+@@ -241,7 +242,7 @@
+   }
+ 
+   bool isTargetWin32() const {
+-    return !In64BitMode && (isTargetMingw() || isTargetWindows());
++    return !In64BitMode && (isTargetMingw() || isTargetWindows() || isTargetDigiWin());
+   }
+ 
+   bool isPICStyleSet() const { return PICStyle != PICStyles::None; }
+Index: lib/Transforms/InstCombine/InstCombineAddSub.cpp
+===================================================================
+--- lib/Transforms/InstCombine/InstCombineAddSub.cpp	(revision 283131)
++++ lib/Transforms/InstCombine/InstCombineAddSub.cpp	(working copy)
+@@ -321,6 +321,22 @@
+   return Changed ? &I : 0;
+ }
+ 
++static void getIntVector(Value* value, SmallVector<int, 8>& values)
++{
++	if (llvm::ConstantVector* constantVector = llvm::dyn_cast<llvm::ConstantVector>(value))
++	{
++		// get components
++		llvm::SmallVector<llvm::Constant*, 8> elements;
++		constantVector->getVectorElements(elements);
++		int numElements = int(elements.size());
++		for (int i = 0; i < numElements; ++i)
++		{
++			if (llvm::ConstantInt* element = llvm::dyn_cast<llvm::ConstantInt>(elements[i]))
++				values[i] = int(element->getZExtValue());
++		}
++	}
++}
++
+ Instruction *InstCombiner::visitFAdd(BinaryOperator &I) {
+   bool Changed = SimplifyAssociativeOrCommutative(I);
+   Value *LHS = I.getOperand(0), *RHS = I.getOperand(1);
+@@ -328,10 +344,27 @@
+   if (Constant *RHSC = dyn_cast<Constant>(RHS)) {
+     // X + 0 --> X
+     if (ConstantFP *CFP = dyn_cast<ConstantFP>(RHSC)) {
+-      if (CFP->isExactlyValue(ConstantFP::getNegativeZero
+-                              (I.getType())->getValueAPF()))
++      //if (CFP->isExactlyValue(ConstantFP::getNegativeZero
++      //                        (I.getType())->getValueAPF()))
++      if (CFP->isZero()) //! non-IEEE conformant patch
+         return ReplaceInstUsesWith(I, LHS);
+     }
++    else if (RHSC->getType()->isVectorTy()) //! non-IEEE conformant patch
++    {
++      if (ConstantVector *Op1V = dyn_cast<ConstantVector>(RHSC)) {
++        if (Constant *Splat = Op1V->getSplatValue()) {
++          if (ConstantFP *F = dyn_cast<ConstantFP>(Splat))
++          {
++            if (F->isZero())
++              return ReplaceInstUsesWith(I, LHS); // X + 0 --> 0
++          }
++        }
++      }
++      else if (ConstantAggregateZero *Op1Z = dyn_cast<ConstantAggregateZero>(RHSC))
++      {
++        return ReplaceInstUsesWith(I, LHS); // X + 0 --> 0
++      }      
++    }
+ 
+     if (isa<PHINode>(LHS))
+       if (Instruction *NV = FoldOpIntoPhi(I))
+@@ -391,6 +424,92 @@
+     }
+   }
+   
++  //! check for constant diagonal matrix * vector: a.xx * [2 0] + a.yy * [0 3]  -->  a * [2 3]
++  BinaryOperator* leftMul = dyn_cast<BinaryOperator>(LHS);
++  BinaryOperator* rightMul = dyn_cast<BinaryOperator>(RHS);
++  if (leftMul != NULL && rightMul != NULL && leftMul->getOpcode() == Instruction::FMul && rightMul->getOpcode() == Instruction::FMul)
++  {
++	ShuffleVectorInst* leftShuffle = dyn_cast<ShuffleVectorInst>(leftMul->getOperand(0));
++	ShuffleVectorInst* rightShuffle = dyn_cast<ShuffleVectorInst>(rightMul->getOperand(0));
++	
++	// get multiplication constant vectors (e.g. [0 1])
++	ConstantVector* leftConstVector = llvm::dyn_cast<ConstantVector>(leftMul->getOperand(1));
++	ConstantVector* rightConstVector = llvm::dyn_cast<ConstantVector>(rightMul->getOperand(1));
++	
++	if (leftShuffle != NULL && rightShuffle != NULL && leftConstVector != NULL && rightConstVector != NULL)
++	{
++		Value* value = leftShuffle->getOperand(0);
++		if (value == rightShuffle->getOperand(0))
++		{
++			int numElements = cast<VectorType>(I.getType())->getNumElements();
++
++			// get shuffle masks (e.g. .xx)
++			SmallVector<int, 8> leftMask(numElements);
++			SmallVector<int, 8> rightMask(numElements);
++			getIntVector(leftShuffle->getOperand(2), leftMask);
++			getIntVector(rightShuffle->getOperand(2), rightMask);
++					
++			SmallVector<Constant*, 8> leftConsts;
++			SmallVector<Constant*, 8> rightConsts;
++			leftConstVector->getVectorElements(leftConsts);
++			rightConstVector->getVectorElements(rightConsts);
++
++			if (leftConsts.size() == numElements && rightConsts.size() == numElements)
++			{
++				SmallVector<Constant*, 8> newShuffleMask(numElements);
++				SmallVector<Constant*, 8> newConst(numElements);
++
++				int i;
++				bool noShuffle = true;
++				for (i = 0; i < numElements; ++i)
++				{
++					// get shuffle indices
++					int leftIndex = leftMask[i];
++					int rightIndex = rightMask[i];
++				
++					// check if indices access the first vector
++					if (leftIndex >= numElements && rightIndex >= numElements)
++						break;
++				
++					// get values from constant vectors
++					ConstantFP* leftConst = dyn_cast<ConstantFP>(leftConsts[i]);
++					ConstantFP* rightConst = dyn_cast<ConstantFP>(rightConsts[i]);
++				
++					// check if valid
++					if (leftConst == NULL || rightConst == NULL)
++						break;
++				
++					// check if at least one is zero
++					if (!leftConst->isZero() && !rightConst->isZero())
++						break;
++				
++					// assign dependent on constant
++					int index = leftIndex;
++					ConstantFP* constant = leftConst;
++					if (!rightConst->isZero())
++					{
++						index = rightIndex;
++						constant = rightConst;
++					}
++
++					newShuffleMask[i] = Builder->getInt32(index);
++					newConst[i] = constant;
++					
++					noShuffle &= index == i;
++				}
++			
++				// check if we made it through
++				if (i == numElements)
++				{
++					Value* newShuffle = noShuffle ? value : Builder->CreateShuffleVector(
++						value, leftShuffle->getOperand(1), ConstantVector::get(newShuffleMask), "shuffle");
++					return BinaryOperator::CreateFMul(newShuffle, ConstantVector::get(newConst), "mul");
++				}
++			}
++		}
++	}
++  }
++  
+   return Changed ? &I : 0;
+ }
+ 
+Index: lib/Transforms/InstCombine/InstCombineCasts.cpp
+===================================================================
+--- lib/Transforms/InstCombine/InstCombineCasts.cpp	(revision 283131)
++++ lib/Transforms/InstCombine/InstCombineCasts.cpp	(working copy)
+@@ -455,13 +455,13 @@
+   }
+ 
+   // Canonicalize trunc x to i1 -> (icmp ne (and x, 1), 0), likewise for vector.
+-  if (DestTy->getScalarSizeInBits() == 1) {
++/*  if (DestTy->getScalarSizeInBits() == 1) {
+     Constant *One = ConstantInt::get(Src->getType(), 1);
+     Src = Builder->CreateAnd(Src, One);
+     Value *Zero = Constant::getNullValue(Src->getType());
+     return new ICmpInst(ICmpInst::ICMP_NE, Src, Zero);
+   }
+-  
++*/  
+   // Transform trunc(lshr (zext A), Cst) to eliminate one type conversion.
+   Value *A = 0; ConstantInt *Cst = 0;
+   if (Src->hasOneUse() &&
+Index: lib/Transforms/InstCombine/InstCombineMulDivRem.cpp
+===================================================================
+--- lib/Transforms/InstCombine/InstCombineMulDivRem.cpp	(revision 283131)
++++ lib/Transforms/InstCombine/InstCombineMulDivRem.cpp	(working copy)
+@@ -263,15 +263,34 @@
+       // ANSI says we can drop signals, so we can do this anyway." (from GCC)
+       if (Op1F->isExactlyValue(1.0))
+         return ReplaceInstUsesWith(I, Op0);  // Eliminate 'fmul double %X, 1.0'
++      
++      //! non-IEEE conformant patch
++      if (Op1F->isZero())
++        return ReplaceInstUsesWith(I, Op1F);  // X * 0 --> 0
++      //         
++      
+     } else if (Op1C->getType()->isVectorTy()) {
+       if (ConstantVector *Op1V = dyn_cast<ConstantVector>(Op1C)) {
+         // As above, vector X*splat(1.0) -> X in all defined cases.
+         if (Constant *Splat = Op1V->getSplatValue()) {
+           if (ConstantFP *F = dyn_cast<ConstantFP>(Splat))
++          {
+             if (F->isExactlyValue(1.0))
+               return ReplaceInstUsesWith(I, Op0);
++
++            //! non-IEEE conformant patch
++            if (F->isZero())
++              return ReplaceInstUsesWith(I, Op1V); // X * 0  --> 0
++            //
++          }
+         }
+       }
++      //! non-IEEE conformant patch
++      else if (ConstantAggregateZero *Op1Z = dyn_cast<ConstantAggregateZero>(Op1C))
++      {
++        return ReplaceInstUsesWith(I, Op1Z); // X * 0 --> 0
++      }      
++      //
+     }
+ 
+     // Try to fold constant mul into select arguments.
+Index: lib/VMCore/AsmWriter.cpp
+===================================================================
+--- lib/VMCore/AsmWriter.cpp	(revision 283131)
++++ lib/VMCore/AsmWriter.cpp	(working copy)
+@@ -97,11 +97,13 @@
+   }
+ 
+   // Scan the name to see if it needs quotes first.
+-  bool NeedsQuotes = isdigit(Name[0]);
++  bool NeedsQuotes = Name[0] >= '0' && Name[0] <= '9';
+   if (!NeedsQuotes) {
+     for (unsigned i = 0, e = Name.size(); i != e; ++i) {
+       char C = Name[i];
+-      if (!isalnum(C) && C != '-' && C != '.' && C != '_') {
++      if (!((C >= '0' && C <= '9') || (C >= 'A' && C <= 'Z')
++        || (C >= 'a' && C <= 'z') || C == '_' || C == '-' || C == '.'
++        || (C & 0x80) != 0)) {
+         NeedsQuotes = true;
+         break;
+       }
+Index: lib/VMCore/LLVMContext.cpp
+===================================================================
+--- lib/VMCore/LLVMContext.cpp	(revision 283131)
++++ lib/VMCore/LLVMContext.cpp	(working copy)
+@@ -115,12 +115,19 @@
+   if (MDName.empty())
+     return false;
+ 
+-  if (!std::isalpha(MDName[0]))
+-    return false;
++  {
++    char C = MDName[0];
++    if (!((C >= 'A' && C <= 'Z') || (C >= 'a' && C <= 'z')
++      || (C & 0x80) != 0))
++      return false;
++  }
+ 
+   for (StringRef::iterator I = MDName.begin() + 1, E = MDName.end(); I != E;
+        ++I) {
+-    if (!std::isalnum(*I) && *I != '_' && *I != '-' && *I != '.')
++    char C = *I;
++    if (!((C >= '0' && C <= '9') || (C >= 'A' && C <= 'Z')
++      || (C >= 'a' && C <= 'z') || C == '_' || C == '-' || C == '.'
++      || (C & 0x80) != 0))
+       return false;
+   }
+   return true;
